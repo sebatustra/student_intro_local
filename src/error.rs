@@ -10,7 +10,10 @@ pub enum StudentIntroError {
     UninitializedAccount,
 
     #[error("Data passed is too large!")]
-    InvalidDataLength
+    InvalidDataLength,
+
+    #[error("Invalid ATA address")]
+    InvalidAddress
 }
 
 impl From<StudentIntroError> for ProgramError {

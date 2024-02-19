@@ -12,8 +12,12 @@ use solana_program::{
     program_pack::IsInitialized, 
     pubkey::Pubkey, 
     system_instruction, 
-    sysvar::{rent::Rent, Sysvar}
+    sysvar::{rent::Rent, Sysvar},
+    native_token::LAMPORTS_PER_SOL,
 };
+use spl_token::{instruction::initialize_mint, ID as TOKEN_PROGRAM_ID};
+use spl_associated_token_account::get_associated_token_address;
+
 use crate::instruction::IntroInstruction;
 use crate::state::{
     ReplyCounterState,
@@ -43,7 +47,8 @@ pub fn process_intruction(
         IntroInstruction::AddReplyToIntro { 
             name, 
             reply 
-        } => add_reply_to_intro(program_id, accounts, name, reply)
+        } => add_reply_to_intro(program_id, accounts, name, reply),
+        IntroInstruction::InitializeMint => initialize_token_mint(program_id, accounts),
     }
 }
 
@@ -60,7 +65,11 @@ fn add_student_intro(
     let initializer = next_account_info(accounts_iter)?;
     let pda_intro_given = next_account_info(accounts_iter)?;
     let pda_counter_given = next_account_info(accounts_iter)?;
+    let pda_mint_given = next_account_info(accounts_iter)?;
+    let pda_auth_given = next_account_info(accounts_iter)?;
+    let pda_ata = next_account_info(accounts_iter)?;
     let system_program = next_account_info(accounts_iter)?;
+    let token_program = next_account_info(accounts_iter)?;
 
     if !initializer.is_signer {
         msg!("Missing initializer signature");
@@ -173,6 +182,55 @@ fn add_student_intro(
 
     msg!("add_student_intro was succesfull!");
 
+    let (pda_mint_derived, _mint_bump) = Pubkey::find_program_address(
+        &[b"token_mint"], 
+        program_id
+    );
+
+    let (pda_auth_derived, auth_bump) = Pubkey::find_program_address(
+        &[b"token_auth"],
+        program_id
+    );
+
+    if pda_mint_derived != *pda_mint_given.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if pda_auth_derived != *pda_auth_given.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if TOKEN_PROGRAM_ID != *token_program.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if *pda_ata.key != get_associated_token_address(
+        initializer.key, 
+        pda_mint_given.key
+    ) {
+        return Err(StudentIntroError::InvalidAddress.into())
+    }
+
+    invoke_signed(
+        &spl_token::instruction::mint_to(
+            token_program.key, 
+            pda_mint_given.key,
+            pda_ata.key, 
+            pda_auth_given.key, 
+            &[], 
+            10 * LAMPORTS_PER_SOL
+        )?,
+        &[
+            pda_mint_given.clone(),
+            pda_ata.clone(),
+            pda_auth_given.clone()
+        ],
+        &[&[
+            b"token_auth",
+            &[auth_bump]
+        ]]
+    )?;
+
     Ok(())
 }
 
@@ -240,7 +298,11 @@ fn add_reply_to_intro(
     let pda_intro_given = next_account_info(accounts_iter)?;
     let pda_counter_given = next_account_info(accounts_iter)?;
     let pda_reply_given = next_account_info(accounts_iter)?;
+    let pda_mint_given = next_account_info(accounts_iter)?;
+    let pda_auth_given = next_account_info(accounts_iter)?;
+    let pda_ata_given = next_account_info(accounts_iter)?;
     let system_program = next_account_info(accounts_iter)?;
+    let token_program = next_account_info(accounts_iter)?;
 
     if !initializer.is_signer {
         msg!("initializer is not signer");
@@ -311,6 +373,141 @@ fn add_reply_to_intro(
 
     counter_data.serialize(&mut &mut pda_counter_given.data.borrow_mut()[..])?;
 
+    let (pda_mint_derived, _mint_pda) = Pubkey::find_program_address(
+        &[b"token_mint"], 
+        program_id
+    );
+
+    let (pda_auth_derived, auth_pda) = Pubkey::find_program_address(
+        &[b"token_auth"], 
+        program_id
+    );
+
+    if pda_mint_derived != *pda_mint_given.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if pda_auth_derived != *pda_auth_given.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if TOKEN_PROGRAM_ID != *token_program.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if *pda_ata_given.key != get_associated_token_address(
+        initializer.key, 
+        pda_mint_given.key
+    ) {
+        return Err(StudentIntroError::InvalidAddress.into())
+    }
+
+    invoke_signed(
+        &spl_token::instruction::mint_to(
+            token_program.key, 
+            pda_mint_given.key, 
+            pda_ata_given.key, 
+            pda_auth_given.key, 
+            &[], 
+            5 * LAMPORTS_PER_SOL
+        )?, 
+        &[
+            pda_mint_given.clone(),
+            pda_ata_given.clone(),
+            pda_auth_given.clone()
+        ], 
+        &[&[
+            b"token_auth",
+            &[auth_pda]
+        ]]
+    )?;
+
     Ok(())
 }
 
+fn initialize_token_mint(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo]
+) -> ProgramResult {
+    // get the accounts (system_program, initializer, token_mint, mint_auth, token_program, sysvar_rent)
+
+    let accounts_iter = &mut accounts.iter();
+
+    let initializer = next_account_info(accounts_iter)?;
+    let token_mint = next_account_info(accounts_iter)?;
+    let token_auth = next_account_info(accounts_iter)?;
+    let system_program = next_account_info(accounts_iter)?;
+    let token_program = next_account_info(accounts_iter)?;
+    let sysvar_rent = next_account_info(accounts_iter)?;
+
+    let (pda_token_mint, mint_bump) = Pubkey::find_program_address(
+        &[b"token_mint"], 
+        program_id
+    );
+
+    let (pda_token_auth, _auth_bump) = Pubkey::find_program_address(
+        &[b"token_auth"], 
+        program_id
+    );
+
+    if pda_token_mint != *token_mint.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if pda_token_auth != *token_auth.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    if TOKEN_PROGRAM_ID != *token_program.key {
+        return Err(StudentIntroError::InvalidPDA.into())
+    }
+
+    let rent = Rent::get()?;
+    let rent_lamports = rent.minimum_balance(82);
+
+    // create account
+    invoke_signed(
+        &system_instruction::create_account(
+            initializer.key, 
+            token_mint.key, 
+            rent_lamports, 
+            82, 
+            token_program.key
+        ),
+        &[
+            initializer.clone(),
+            token_mint.clone(),
+            system_program.clone()
+        ],
+        &[&[
+            b"token_mint",
+            &[mint_bump]
+        ]]
+    )?;
+
+    msg!("Created token mint account");
+
+    // initialize token mint
+    invoke_signed(
+        &initialize_mint(
+            token_program.key, 
+            token_mint.key, 
+            token_auth.key, 
+            Option::None, 
+            9
+        )?,
+        &[
+            token_mint.clone(),
+            sysvar_rent.clone(),
+            token_auth.clone()
+        ],
+        &[&[
+            b"token_mint",
+            &[mint_bump]
+        ]]
+    )?;
+
+    msg!("Initialized token mint");
+
+    Ok(())
+}

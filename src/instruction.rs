@@ -13,7 +13,8 @@ pub enum IntroInstruction {
     AddReplyToIntro {
         name: String,
         reply: String
-    }
+    },
+    InitializeMint
 }
 
 #[derive(BorshDeserialize)]
@@ -48,6 +49,7 @@ impl IntroInstruction {
 
                 IntroInstruction::AddReplyToIntro { name: payload.name, reply: payload.reply }
             },
+            3 => IntroInstruction::InitializeMint,
             _ => return Err(ProgramError::InvalidInstructionData)
         })
     }
